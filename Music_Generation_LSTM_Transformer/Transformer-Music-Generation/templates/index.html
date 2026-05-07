@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Genre Melody Generator</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #0f0f0f;
+      font-family: 'Segoe UI', sans-serif;
+      color: #f0f0f0;
+    }
+
+    .card {
+      background: #1a1a1a;
+      border: 1px solid #2a2a2a;
+      border-radius: 16px;
+      padding: 48px 56px;
+      width: 440px;
+      text-align: center;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.5);
+    }
+
+    h1 { font-size: 1.6rem; font-weight: 600; margin-bottom: 8px; }
+    p.subtitle { color: #888; font-size: 0.9rem; margin-bottom: 36px; }
+
+    label {
+      display: block;
+      text-align: left;
+      font-size: 0.75rem;
+      color: #aaa;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      margin-bottom: 8px;
+    }
+
+    select {
+      width: 100%;
+      padding: 12px 16px;
+      background: #111;
+      border: 1px solid #333;
+      border-radius: 8px;
+      color: #f0f0f0;
+      font-size: 1rem;
+      appearance: none;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23888' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+      background-repeat: no-repeat;
+      background-position: right 14px center;
+      cursor: pointer;
+      margin-bottom: 24px;
+    }
+    select:focus { outline: none; border-color: #6c63ff; }
+
+    button#btn {
+      width: 100%;
+      padding: 13px;
+      background: #6c63ff;
+      color: #fff;
+      border: none;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s, transform 0.1s;
+    }
+    button#btn:hover   { background: #5a52e0; }
+    button#btn:active  { transform: scale(0.98); }
+    button#btn:disabled { background: #3a3a3a; color: #666; cursor: not-allowed; }
+
+    .status { margin-top: 20px; font-size: 0.9rem; color: #888; min-height: 20px; }
+
+    .player {
+      margin-top: 28px;
+      display: none;
+      background: #111;
+      border: 1px solid #2a2a2a;
+      border-radius: 12px;
+      padding: 20px;
+    }
+
+    .player-label {
+      font-size: 0.75rem;
+      color: #aaa;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      margin-bottom: 16px;
+    }
+
+    .controls { display: flex; align-items: center; gap: 12px; }
+
+    button.ctrl {
+      width: 44px; height: 44px;
+      border-radius: 50%;
+      border: none;
+      background: #6c63ff;
+      color: #fff;
+      font-size: 1.1rem;
+      cursor: pointer;
+      flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      transition: background 0.2s;
+    }
+    button.ctrl:hover { background: #5a52e0; }
+
+    .progress-wrap {
+      flex: 1;
+      height: 4px;
+      background: #333;
+      border-radius: 2px;
+      cursor: pointer;
+      position: relative;
+    }
+    .progress-bar {
+      height: 100%;
+      background: #6c63ff;
+      border-radius: 2px;
+      width: 0%;
+      transition: width 0.1s linear;
+    }
+
+    .time { font-size: 0.75rem; color: #888; flex-shrink: 0; min-width: 60px; text-align: right; }
+
+    .download {
+      margin-top: 14px;
+      font-size: 0.8rem;
+      color: #6c63ff;
+      text-decoration: none;
+      display: inline-block;
+    }
+    .download:hover { text-decoration: underline; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Genre Melody Generator</h1>
+    <p class="subtitle">Select a genre and generate an original melody</p>
+
+    <label for="genre">Genre</label>
+    <select id="genre">
+      {% for genre in genres %}
+        <option value="{{ genre }}">{{ genre }}</option>
+      {% endfor %}
+    </select>
+
+    <button id="btn" onclick="generate()">Generate</button>
+    <div class="status" id="status"></div>
+
+    <div class="player" id="player">
+      <div class="player-label" id="player-title">Generated Melody</div>
+      <div class="controls">
+        <button class="ctrl" id="play-btn" onclick="togglePlay()">&#9654;</button>
+        <div class="progress-wrap" id="progress-wrap" onclick="seek(event)">
+          <div class="progress-bar" id="progress-bar"></div>
+        </div>
+        <div class="time" id="time-display">0:00</div>
+      </div>
+      <a class="download" id="dl-link" href="#" download>Download MIDI</a>
+    </div>
+  </div>
+
+  <!-- MIDI playback via midi-player-js + soundfont-player -->
+  <script src="https://cdn.jsdelivr.net/npm/midi-player-js@2.0.16/browser/midiplayer.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/soundfont-player/dist/soundfont-player.min.js"></script>
+
+  <script>
+    let audioCtx = null;
+    let player = null;
+    let isPlaying = false;
+    let currentMidiUrl = null;
+
+    // Maps MIDI channel number -> loaded Soundfont instrument object.
+    // Updated whenever a Program Change event arrives.
+    let channelInstruments = {};
+
+    // Maps GM program number -> soundfont name used by soundfont-player.
+    // Covers the 6 non-drum programs our tokenizer assigns + a fallback.
+    const PROGRAM_TO_SOUNDFONT = {
+        0:  'acoustic_grand_piano',   // PIANO track
+       25:  'acoustic_guitar_steel',  // GUITAR track
+       33:  'electric_bass_finger',   // BASS track
+       48:  'string_ensemble_1',      // STRINGS track
+       56:  'trumpet',                // LEAD track
+       88:  'pad_1_new_age',          // PAD track
+    };
+    const FALLBACK_SOUNDFONT = 'acoustic_grand_piano';
+    const DRUMS_SOUNDFONT    = 'woodblock'; // channel 9 (drum channel)
+
+    function getAudioCtx() {
+      if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      return audioCtx;
+    }
+
+    // Load a soundfont by GM program number and assign it to a MIDI channel.
+    async function loadInstrumentForChannel(channel, program) {
+      const ctx  = getAudioCtx();
+      const name = PROGRAM_TO_SOUNDFONT[program] ?? FALLBACK_SOUNDFONT;
+      try {
+        channelInstruments[channel] = await Soundfont.instrument(ctx, name);
+      } catch (e) {
+        // If the soundfont fails to load, fall back to piano so playback continues.
+        channelInstruments[channel] = await Soundfont.instrument(ctx, FALLBACK_SOUNDFONT);
+      }
+    }
+
+    // Pre-load every soundfont we might need so there's no stutter during playback.
+    async function preloadAllSoundfonts() {
+      const ctx = getAudioCtx();
+      const loads = [];
+
+      // Load all non-drum soundfonts keyed by their program number.
+      for (const [prog, name] of Object.entries(PROGRAM_TO_SOUNDFONT)) {
+        loads.push(
+          Soundfont.instrument(ctx, name)
+            .then(inst => { channelInstruments['prog_' + prog] = inst; })
+            .catch(() => {})
+        );
+      }
+      // Channel 9 is always drums in General MIDI.
+      loads.push(
+        Soundfont.instrument(ctx, DRUMS_SOUNDFONT)
+          .then(inst => { channelInstruments[9] = inst; })
+          .catch(() => {})
+      );
+      await Promise.all(loads);
+    }
+
+    function initPlayer() {
+      player = new MidiPlayer.Player(function(event) {
+        const ctx = getAudioCtx();
+
+        // When the MIDI file declares which instrument a channel uses,
+        // load the matching soundfont and assign it to that channel.
+        if (event.name === 'Program Change') {
+          loadInstrumentForChannel(event.channel, event.value);
+          return;
+        }
+
+        if (event.name === 'Note on' && event.velocity > 0) {
+          // Look up the soundfont for this channel. Channel 9 always uses drums.
+          // Fall back to the pre-loaded pool keyed by program if channel not yet mapped.
+          const inst = channelInstruments[event.channel]
+                    ?? channelInstruments['prog_0']; // piano as last resort
+          if (inst) {
+            inst.play(event.noteName, ctx.currentTime, { gain: event.velocity / 100 });
+          }
+        }
+      });
+
+      player.on('fileLoaded', updateProgress);
+      player.on('playing',    updateProgress);
+      player.on('endOfFile', function() {
+        isPlaying = false;
+        document.getElementById('play-btn').innerHTML = '&#9654;';
+        document.getElementById('progress-bar').style.width = '100%';
+      });
+    }
+
+    function updateProgress() {
+      if (!player) return;
+      const pct = player.getSongPercentRemaining
+        ? (100 - player.getSongPercentRemaining()) : 0;
+      document.getElementById('progress-bar').style.width = pct + '%';
+
+      const total   = player.getSongTime ? player.getSongTime() : 0;
+      const elapsed = total * (pct / 100);
+      document.getElementById('time-display').textContent =
+        fmtTime(elapsed) + ' / ' + fmtTime(total);
+    }
+
+    function fmtTime(s) {
+      const m = Math.floor(s / 60);
+      const sec = Math.floor(s % 60).toString().padStart(2, '0');
+      return `${m}:${sec}`;
+    }
+
+    function togglePlay() {
+      if (!player || !currentMidiUrl) return;
+      if (isPlaying) {
+        player.pause();
+        isPlaying = false;
+        document.getElementById('play-btn').innerHTML = '&#9654;';
+      } else {
+        getAudioCtx().resume();
+        player.play();
+        isPlaying = true;
+        document.getElementById('play-btn').innerHTML = '&#9646;&#9646;';
+      }
+    }
+
+    function seek(e) {
+      if (!player) return;
+      const wrap = document.getElementById('progress-wrap');
+      const pct  = e.offsetX / wrap.offsetWidth;
+      const tick = Math.floor(pct * player.totalTicks);
+      player.skipToTick(tick);
+    }
+
+    async function loadAndPlay(url) {
+      currentMidiUrl = url;
+      if (!player) initPlayer();
+
+      // Reset channel map for the new file.
+      channelInstruments = {};
+
+      const ctx = getAudioCtx();
+      await ctx.resume();
+
+      // Pre-load all soundfonts in parallel before starting playback.
+      document.getElementById('status').textContent = 'Loading instruments...';
+      await preloadAllSoundfonts();
+      document.getElementById('status').textContent = '';
+
+      const res = await fetch(url);
+      const buf = await res.arrayBuffer();
+      player.loadArrayBuffer(buf);
+      player.play();
+      isPlaying = true;
+      document.getElementById('play-btn').innerHTML = '&#9646;&#9646;';
+    }
+
+    async function generate() {
+      const genre  = document.getElementById('genre').value;
+      const btn    = document.getElementById('btn');
+      const status = document.getElementById('status');
+
+      btn.disabled = true;
+      btn.textContent = 'Generating...';
+      status.textContent = 'This may take a few seconds...';
+      document.getElementById('player').style.display = 'none';
+
+      try {
+        const res  = await fetch('/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ genre }),
+        });
+        const data = await res.json();
+        if (data.error) { status.textContent = 'Error: ' + data.error; return; }
+
+        const midiUrl = `/midi/${data.file}`;
+        document.getElementById('player-title').textContent = genre + ' — Generated Melody';
+        document.getElementById('dl-link').href = midiUrl;
+        document.getElementById('dl-link').download = data.file;
+        document.getElementById('player').style.display = 'block';
+        status.textContent = '';
+
+        await loadAndPlay(midiUrl);
+      } catch (err) {
+        status.textContent = 'Request failed. Is the server running?';
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Generate';
+      }
+    }
+  </script>
+</body>
+</html>
